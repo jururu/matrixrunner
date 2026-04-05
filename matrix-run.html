@@ -53,11 +53,6 @@ function resize() {
   bgCtx.fillRect(0, 0, W, H);
   initRain();
   if (state && state.player) state.player.x = W * 0.20;
-  if (state && state.screen === 'playing') {
-    const gy = H * GY;
-    for (const p of state.platforms) p.y = gy;
-    if (state.player && state.player.onGround) state.player.y = gy;
-  }
 }
 window.addEventListener('resize', resize);
 
@@ -314,18 +309,32 @@ function getStage(dist) {
 
 function rnd(a, b) { return a + Math.random() * (b - a); }
 
+// Platform Y range: between 45% (middle-ish) and 78% of screen height.
+// Each new platform shifts at most ±13% from the previous one so the
+// height changes feel intentional rather than chaotic.
+const PLAT_Y_MIN   = 0.45;
+const PLAT_Y_MAX   = 0.78;
+const PLAT_Y_DELTA = 0.13; // max ratio shift per platform
+
+function nextPlatY(prevY) {
+  const lo = Math.max(H * PLAT_Y_MIN, prevY - H * PLAT_Y_DELTA);
+  const hi = Math.min(H * PLAT_Y_MAX, prevY + H * PLAT_Y_DELTA);
+  return rnd(lo, hi);
+}
+
 function addPlatform() {
   const s    = getStage(Math.floor(state.score));
   const last = state.platforms[state.platforms.length - 1];
   state.platforms.push({
     x:     last.x + last.width + rnd(s.g[0], s.g[1]),
-    y:     H * GY,
+    y:     nextPlatY(last.y),
     width: rnd(s.pw[0], s.pw[1]),
   });
 }
 
 function initPlatforms() {
   state.platforms = [];
+  // First platform: safe, flat, at default ground level
   state.platforms.push({ x: -200, y: H * GY, width: W * 0.65 });
   while (state.platforms[state.platforms.length - 1].x +
          state.platforms[state.platforms.length - 1].width < W * 2.5) {
