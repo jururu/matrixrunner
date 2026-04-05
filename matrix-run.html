@@ -64,9 +64,10 @@ window.addEventListener('resize', resize);
 // ─────────────────────────────────────────────────────────────
 //  CONSTANTS
 // ─────────────────────────────────────────────────────────────
-const GRAVITY  = 0.34;
-const JUMP_V   = [-14, -12, -10]; // ground / 2nd / rhythm
+const GRAVITY  = 0.26;
+const JUMP_V   = [-10, -8.5, -7.5]; // ground / 2nd / rhythm
 const MAX_FALL = 12;
+const CEIL_Y   = 0.10; // player top can't exceed this ratio from screen top
 const PW       = 7;    // player half-width for collision
 const PH       = 40;   // player height
 const GY       = 0.70; // ground Y ratio
@@ -131,9 +132,29 @@ function tone(freq, freq2, dur, wave, vol) {
 
 function sfx(id) {
   if (!state.snd || !AC) return;
-  if (id === 'j1')  return tone(260, 520, 0.06, 'square',   0.30);
-  if (id === 'j2')  return tone(320, 640, 0.06, 'square',   0.28);
-  if (id === 'rhy') return tone(400, 900, 0.10, 'sawtooth', 0.38);
+  if (id === 'j1')  return tone(220, 440, 0.07, 'square', 0.28);
+  if (id === 'j2')  return tone(280, 520, 0.07, 'square', 0.25);
+  if (id === 'rhy') {
+    // Satisfying chord sweep: 3 layers detune up together
+    const t = AC.currentTime;
+    const layers = [
+      { f1: 440, f2: 880,  wave: 'sine',     vol: 0.18 },
+      { f1: 550, f2: 1100, wave: 'triangle', vol: 0.14 },
+      { f1: 660, f2: 1320, wave: 'sawtooth', vol: 0.10 },
+    ];
+    layers.forEach(({ f1, f2, wave, vol }) => {
+      const o = AC.createOscillator(), g = AC.createGain();
+      o.connect(g); g.connect(master);
+      o.type = wave;
+      o.frequency.setValueAtTime(f1, t);
+      o.frequency.exponentialRampToValueAtTime(f2, t + 0.14);
+      g.gain.setValueAtTime(vol, t);
+      g.gain.linearRampToValueAtTime(vol * 0.8, t + 0.06);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+      o.start(t); o.stop(t + 0.23);
+    });
+    return;
+  }
   if (id === 'die') {
     for (let i = 0; i < 4; i++) {
       const bt = AC.currentTime + i * 0.11;
@@ -395,6 +416,13 @@ function physics() {
   const prevY = p.y;
   p.y += p.vy;
 
+  // Ceiling — clamp head position so consecutive jumps can't stack into sky
+  const ceilPx = H * CEIL_Y + PH;
+  if (p.y < ceilPx) {
+    p.y  = ceilPx;
+    p.vy = 0; // kill upward momentum, start falling naturally
+  }
+
   const wasOn = p.onGround;
   p.onGround  = false;
 
@@ -428,7 +456,10 @@ function doJump() {
   if (p.onGround) {
     p.vy = JUMP_V[0]; p.onGround = false; p.jumps = 1; p.lastJmpT = now; sfx('j1');
   } else if (p.jumps === 1) {
-    p.vy = JUMP_V[1]; p.jumps = 2; p.lastJmpT = now; sfx('j2');
+    const dt2 = now - p.lastJmpT;
+    const inRhy2 = dt2 >= RHY_MIN && dt2 <= RHY_MAX;
+    p.vy = JUMP_V[1]; p.jumps = 2; p.lastJmpT = now;
+    sfx(inRhy2 ? 'rhy' : 'j2');
   } else if (p.jumps >= 2) {
     const dt = now - p.lastJmpT;
     if (dt >= RHY_MIN && dt <= RHY_MAX) {
