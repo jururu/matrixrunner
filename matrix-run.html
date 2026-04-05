@@ -64,9 +64,9 @@ window.addEventListener('resize', resize);
 // ─────────────────────────────────────────────────────────────
 //  CONSTANTS
 // ─────────────────────────────────────────────────────────────
-const GRAVITY  = 0.6;
-const JUMP_V   = [-13, -11, -10]; // ground / 2nd / rhythm
-const MAX_FALL = 15;
+const GRAVITY  = 0.36;
+const JUMP_V   = [-10, -8.5, -7.5]; // ground / 2nd / rhythm
+const MAX_FALL = 11;
 const PW       = 7;    // player half-width for collision
 const PH       = 40;   // player height
 const GY       = 0.70; // ground Y ratio
@@ -74,11 +74,11 @@ const RHY_MIN  = 280;  // rhythm window ms
 const RHY_MAX  = 360;
 
 const STAGES = [
-  { d:    0, pw: [200, 350], g: [ 60, 100], s: 4 },
-  { d:  200, pw: [150, 300], g: [ 80, 140], s: 5 },
-  { d:  500, pw: [120, 250], g: [100, 180], s: 6 },
-  { d: 1000, pw: [ 80, 200], g: [120, 220], s: 7 },
-  { d: 2000, pw: [ 60, 160], g: [140, 260], s: 8 },
+  { d:    0, pw: [200, 350], g: [ 60, 100], s: 3   },
+  { d:  200, pw: [150, 300], g: [ 80, 140], s: 3.5 },
+  { d:  500, pw: [120, 250], g: [100, 180], s: 4.5 },
+  { d: 1000, pw: [ 80, 200], g: [120, 220], s: 5.5 },
+  { d: 2000, pw: [ 60, 160], g: [140, 260], s: 7   },
 ];
 
 const MAT_CHARS = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
