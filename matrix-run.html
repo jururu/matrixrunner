@@ -197,7 +197,8 @@ function initRain() {
 }
 
 function drawRain() {
-  bgCtx.fillStyle = 'rgba(0,0,0,0.045)';
+  // Faster fade → shorter, dimmer trails = deeper background feel
+  bgCtx.fillStyle = 'rgba(0,0,0,0.18)';
   bgCtx.fillRect(0, 0, W, H);
   bgCtx.font = MAT_FS + "px 'Share Tech Mono', monospace";
   for (let i = 0; i < rainDrops.length; i++) {
@@ -205,7 +206,8 @@ function drawRain() {
     d.y += d.spd;
     const sy = d.y * MAT_FS;
     if (sy < 0) continue;
-    bgCtx.fillStyle = '#c8ffc8';
+    // Dim green — feels far behind the game elements
+    bgCtx.fillStyle = 'rgba(0,180,50,0.28)';
     bgCtx.fillText(MAT_CHARS[Math.floor(Math.random() * MAT_CHARS.length)], i * MAT_FS, sy);
     if (sy > H && Math.random() > 0.975) {
       d.y   = -(Math.floor(Math.random() * 20));
@@ -324,29 +326,60 @@ function updatePlatforms() {
 
 function drawPlatforms() {
   ctx.save();
+  const BODY_H  = 28; // visible slab thickness
+  const SIDE_H  = 10; // perspective side face height
+
   for (const p of state.platforms) {
     const { x, y, width: w } = p;
 
-    // Body
-    ctx.fillStyle = 'rgba(0,255,65,0.07)';
-    ctx.fillRect(x, y, w, 18);
+    // ── Bottom shadow (depth illusion) ──
+    ctx.fillStyle = 'rgba(0,80,20,0.25)';
+    ctx.fillRect(x + 4, y + BODY_H + SIDE_H, w, 6);
 
-    // Top glow line
-    ctx.shadowBlur  = 7;
+    // ── Perspective side face (front-bottom) ──
+    ctx.fillStyle = 'rgba(0,120,35,0.35)';
+    ctx.beginPath();
+    ctx.moveTo(x,     y + BODY_H);
+    ctx.lineTo(x + w, y + BODY_H);
+    ctx.lineTo(x + w, y + BODY_H + SIDE_H);
+    ctx.lineTo(x,     y + BODY_H + SIDE_H);
+    ctx.closePath();
+    ctx.fill();
+
+    // Horizontal scanlines inside side face
+    ctx.fillStyle = 'rgba(0,255,65,0.10)';
+    for (let sy = y + BODY_H + 3; sy < y + BODY_H + SIDE_H; sy += 4) {
+      ctx.fillRect(x, sy, w, 1);
+    }
+
+    // ── Main slab body (top face) ──
+    // Deep fill with vertical gradient feel via two rects
+    ctx.fillStyle = 'rgba(0,255,65,0.06)';
+    ctx.fillRect(x, y, w, BODY_H);
+    ctx.fillStyle = 'rgba(0,255,65,0.04)';
+    ctx.fillRect(x, y + BODY_H * 0.5, w, BODY_H * 0.5);
+
+    // ── Top glow edge ──
+    ctx.shadowBlur  = 10;
     ctx.shadowColor = '#00ff41';
-    ctx.fillStyle   = 'rgba(0,255,65,0.90)';
+    ctx.fillStyle   = 'rgba(0,255,65,0.95)';
     ctx.fillRect(x, y, w, 2);
 
-    // Sub-glow band
+    // ── Second bright strip ──
     ctx.shadowBlur = 0;
-    ctx.fillStyle  = 'rgba(0,255,65,0.18)';
-    ctx.fillRect(x, y + 2, w, 4);
+    ctx.fillStyle  = 'rgba(0,255,65,0.22)';
+    ctx.fillRect(x, y + 2, w, 5);
 
-    // Digital tick marks
-    ctx.fillStyle = 'rgba(0,255,65,0.30)';
+    // ── Digital tick marks ──
+    ctx.fillStyle = 'rgba(0,255,65,0.35)';
     for (let tx = x + 12; tx < x + w - 4; tx += 26) {
-      ctx.fillRect(tx, y, 1, 8);
+      ctx.fillRect(tx, y, 1, 10);
     }
+
+    // ── Left & right end caps (vertical bright lines) ──
+    ctx.fillStyle = 'rgba(0,255,65,0.50)';
+    ctx.fillRect(x,         y, 2, BODY_H);
+    ctx.fillRect(x + w - 2, y, 2, BODY_H);
   }
   ctx.restore();
 }
