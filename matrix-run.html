@@ -88,8 +88,9 @@ const state = {
   score:      0,
   speed:      4,
   platforms:  [],
-  obstacles:  [],
-  particles:  [],
+  obstacles:   [],
+  nextObstCd:  200,
+  particles:   [],
   player:     null,
   snd:        false,
   combo:      0,
@@ -331,8 +332,6 @@ function addPlatform() {
   const newY   = nextPlatY(last.y);
   const newW   = rnd(s.pw[0], s.pw[1]);
   state.platforms.push({ x: newX, y: newY, width: newW });
-  // Possibly spawn a floating obstacle in the gap
-  maybeSpawnObstacle(last.x + last.width, gap, last.y, newY);
 }
 
 function initPlatforms() {
@@ -355,29 +354,6 @@ function initPlatforms() {
 
 let frameTick = 0; // global animation counter, incremented in loop
 
-function maybeSpawnObstacle(gapStartX, gapW, prevY, nextY) {
-  // No obstacles in early game; probability ramps with distance
-  const chance = Math.min(0.55, Math.max(0, (state.score - 40) / 400));
-  if (Math.random() > chance) return;
-
-  const types = ['glitch', 'eye', 'shard'];
-  const type  = types[Math.floor(Math.random() * types.length)];
-
-  // Height: relative to the lower of the two adjacent platforms,
-  // placed in a range the player must actively dodge (near head level)
-  const baseY = Math.max(prevY, nextY);
-  const y     = baseY - rnd(PH + 10, PH + 80);
-  if (y - 24 < H * 0.14) return; // too close to ceiling, skip
-
-  state.obstacles.push({
-    type,
-    x:     gapStartX + rnd(gapW * 0.2, gapW * 0.75),
-    y,
-    angle: Math.random() * Math.PI * 2,
-    phase: Math.random() * Math.PI * 2,
-  });
-}
-
 // Tight hitbox half-sizes per type (slightly smaller than visual = forgiving)
 const OB_HIT = { glitch: 11, eye: 12, shard: 10 };
 
@@ -389,6 +365,25 @@ function updateObstacles() {
   while (state.obstacles.length > 0 && state.obstacles[0].x < -120) {
     state.obstacles.shift();
   }
+
+  // Independent time-based spawning — no relation to platforms
+  if (state.score < 10) return; // grace period
+  if (--state.nextObstCd > 0)  return;
+
+  const types = ['glitch', 'eye', 'shard'];
+  state.obstacles.push({
+    type:  types[Math.floor(Math.random() * 3)],
+    x:     W + rnd(60, 180),
+    // Full vertical range: near ceiling → near floor
+    // Weighted so high-altitude obstacles are common (punish infinite jumpers)
+    y:     H * rnd(0.12, 0.78),
+    angle: Math.random() * Math.PI * 2,
+    phase: Math.random() * Math.PI * 2,
+  });
+
+  // Interval shrinks as score grows (busier over time), min ~1 s
+  const base = Math.max(60, 160 - Math.floor(state.score / 15));
+  state.nextObstCd = Math.floor(rnd(base, base * 1.6));
 }
 
 function checkObstacles() {
@@ -823,6 +818,7 @@ function startGame() {
   state.score      = 0;
   state.speed      = 4;
   state.obstacles  = [];
+  state.nextObstCd = 200;
   state.particles  = [];
   state.combo      = 0;
   state.comboTimer = 0;
