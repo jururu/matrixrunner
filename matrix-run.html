@@ -88,6 +88,7 @@ const state = {
   score:      0,
   speed:      4,
   platforms:  [],
+  obstacles:  [],
   particles:  [],
   player:     null,
   snd:        false,
@@ -323,13 +324,15 @@ function nextPlatY(prevY) {
 }
 
 function addPlatform() {
-  const s    = getStage(Math.floor(state.score));
-  const last = state.platforms[state.platforms.length - 1];
-  state.platforms.push({
-    x:     last.x + last.width + rnd(s.g[0], s.g[1]),
-    y:     nextPlatY(last.y),
-    width: rnd(s.pw[0], s.pw[1]),
-  });
+  const s      = getStage(Math.floor(state.score));
+  const last   = state.platforms[state.platforms.length - 1];
+  const gap    = rnd(s.g[0], s.g[1]);
+  const newX   = last.x + last.width + gap;
+  const newY   = nextPlatY(last.y);
+  const newW   = rnd(s.pw[0], s.pw[1]);
+  state.platforms.push({ x: newX, y: newY, width: newW });
+  // Possibly spawn a floating obstacle in the gap
+  maybeSpawnObstacle(last.x + last.width, gap, last.y, newY);
 }
 
 function initPlatforms() {
@@ -339,6 +342,163 @@ function initPlatforms() {
   while (state.platforms[state.platforms.length - 1].x +
          state.platforms[state.platforms.length - 1].width < W * 2.5) {
     addPlatform();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  OBSTACLES
+// ─────────────────────────────────────────────────────────────
+// Three Matrix-themed floating obstacle types:
+//  'glitch'  — flickering code-block square
+//  'eye'     — sentinel orb with radiating spikes
+//  'shard'   — spinning diamond data-fragment
+
+let frameTick = 0; // global animation counter, incremented in loop
+
+function maybeSpawnObstacle(gapStartX, gapW, prevY, nextY) {
+  // No obstacles in early game; probability ramps with distance
+  const chance = Math.min(0.55, Math.max(0, (state.score - 40) / 400));
+  if (Math.random() > chance) return;
+
+  const types = ['glitch', 'eye', 'shard'];
+  const type  = types[Math.floor(Math.random() * types.length)];
+
+  // Height: relative to the lower of the two adjacent platforms,
+  // placed in a range the player must actively dodge (near head level)
+  const baseY = Math.max(prevY, nextY);
+  const y     = baseY - rnd(PH + 10, PH + 80);
+  if (y - 24 < H * 0.14) return; // too close to ceiling, skip
+
+  state.obstacles.push({
+    type,
+    x:     gapStartX + rnd(gapW * 0.2, gapW * 0.75),
+    y,
+    angle: Math.random() * Math.PI * 2,
+    phase: Math.random() * Math.PI * 2,
+  });
+}
+
+// Tight hitbox half-sizes per type (slightly smaller than visual = forgiving)
+const OB_HIT = { glitch: 11, eye: 12, shard: 10 };
+
+function updateObstacles() {
+  for (const ob of state.obstacles) {
+    ob.x -= state.speed;
+    ob.angle += ob.type === 'shard' ? 0.035 : 0.018;
+  }
+  while (state.obstacles.length > 0 && state.obstacles[0].x < -120) {
+    state.obstacles.shift();
+  }
+}
+
+function checkObstacles() {
+  const p = state.player;
+  if (!p || p.dead) return;
+  // Player hitbox (tight inner box)
+  const px1 = p.x - PW + 1, px2 = p.x + PW - 1;
+  const py1 = p.y - PH + 6, py2 = p.y - 3;
+  for (const ob of state.obstacles) {
+    const r = OB_HIT[ob.type];
+    if (px2 > ob.x - r && px1 < ob.x + r &&
+        py2 > ob.y - r && py1 < ob.y + r) {
+      triggerGameOver();
+      return;
+    }
+  }
+}
+
+function drawObstacles() {
+  for (const ob of state.obstacles) {
+    ctx.save();
+    ctx.translate(ob.x, ob.y);
+    const pulse = Math.sin(frameTick * 0.07 + ob.phase);
+    ctx.shadowColor = '#ff0040';
+    ctx.shadowBlur  = 16 + pulse * 6;
+    ctx.strokeStyle = '#ff0040';
+    ctx.lineWidth   = 2;
+
+    if (ob.type === 'glitch') {
+      // Flickering code-block: slowly rocking square filled with a kanji
+      ctx.rotate(Math.sin(ob.angle) * 0.18);
+      const sz = 25;
+      ctx.fillStyle = 'rgba(30,0,8,0.88)';
+      ctx.fillRect(-sz, -sz, sz * 2, sz * 2);
+      ctx.strokeRect(-sz, -sz, sz * 2, sz * 2);
+      // Inner bright border
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = 'rgba(255,80,80,0.5)';
+      ctx.lineWidth   = 1;
+      ctx.strokeRect(-sz + 4, -sz + 4, (sz - 4) * 2, (sz - 4) * 2);
+      // Matrix char — cycles every ~8 frames
+      ctx.fillStyle    = `rgba(255,40,40,${0.75 + pulse * 0.2})`;
+      ctx.font         = "bold 22px 'Share Tech Mono', monospace";
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowBlur   = 8;
+      ctx.shadowColor  = '#ff0040';
+      ctx.fillText(MAT_CHARS[Math.floor(frameTick * 0.12 + ob.phase * 12) % MAT_CHARS.length], 0, 0);
+
+    } else if (ob.type === 'eye') {
+      // Sentinel orb: pulsing circle + rotating spikes
+      const r = 14 + pulse * 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(40,0,12,0.85)';
+      ctx.fill();
+      ctx.stroke();
+      // Iris
+      ctx.shadowBlur = 4;
+      ctx.strokeStyle = 'rgba(255,100,100,0.8)';
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.45, 0, Math.PI * 2);
+      ctx.stroke();
+      // Pupil dot
+      ctx.fillStyle = '#ff0040';
+      ctx.beginPath();
+      ctx.arc(0, 0, 3, 0, Math.PI * 2);
+      ctx.fill();
+      // Radiating spikes (rotating)
+      ctx.strokeStyle = '#ff0040';
+      ctx.shadowBlur  = 12 + pulse * 4;
+      ctx.lineWidth   = 1.5;
+      for (let i = 0; i < 8; i++) {
+        const a = (Math.PI * 2 / 8) * i + ob.angle;
+        const i1 = r + 3, i2 = r + 11 + pulse * 3;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * i1, Math.sin(a) * i1);
+        ctx.lineTo(Math.cos(a) * i2, Math.sin(a) * i2);
+        ctx.stroke();
+      }
+
+    } else { // shard
+      // Spinning diamond data-fragment
+      ctx.rotate(ob.angle);
+      const sz = 19;
+      ctx.beginPath();
+      ctx.moveTo(0, -sz); ctx.lineTo(sz * 0.6, 0);
+      ctx.lineTo(0,  sz); ctx.lineTo(-sz * 0.6, 0);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(35,0,10,0.80)';
+      ctx.fill();
+      ctx.stroke();
+      // Inner shard lines
+      ctx.shadowBlur  = 0;
+      ctx.strokeStyle = 'rgba(255,80,80,0.55)';
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, -sz * 0.5); ctx.lineTo(sz * 0.28, 0);
+      ctx.lineTo(0,  sz * 0.5); ctx.lineTo(-sz * 0.28, 0);
+      ctx.closePath();
+      ctx.stroke();
+      // Bright centre dot
+      ctx.fillStyle = `rgba(255,60,60,${0.7 + pulse * 0.25})`;
+      ctx.beginPath();
+      ctx.arc(0, 0, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
   }
 }
 
@@ -662,6 +822,7 @@ function startGame() {
   state.screen     = 'playing';
   state.score      = 0;
   state.speed      = 4;
+  state.obstacles  = [];
   state.particles  = [];
   state.combo      = 0;
   state.comboTimer = 0;
@@ -718,12 +879,16 @@ function loop() {
 
   } else if (state.screen === 'playing') {
 
+    frameTick++;
     state.score += state.speed / 60;
     state.speed  = getStage(Math.floor(state.score)).s;
     updatePlatforms();
+    updateObstacles();
     physics();
+    checkObstacles();
     updateParticles();
     drawPlatforms();
+    drawObstacles();
     drawPlayer(state.player);
     drawParticles();
     drawHUD();
@@ -732,6 +897,7 @@ function loop() {
 
     updateParticles();
     drawPlatforms();
+    drawObstacles();
     drawParticles();
     drawGameOver();
 
