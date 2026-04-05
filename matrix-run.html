@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>MATRIX RUN</title>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+    canvas { position: absolute; top: 0; left: 0; display: block; }
+    #bgCanvas   { z-index: 0; }
+    #gameCanvas { z-index: 1; }
+    #soundBtn {
+      position: fixed; top: 12px; left: 12px; z-index: 100;
+      background: rgba(0,0,0,0.80); border: 1px solid #00ff41;
+      color: #00ff41; font-family: 'Share Tech Mono', monospace;
+      font-size: 12px; padding: 5px 14px; cursor: pointer;
+      text-shadow: 0 0 6px #00ff41;
+      box-shadow: 0 0 10px rgba(0,255,65,0.25), inset 0 0 6px rgba(0,255,65,0.05);
+      letter-spacing: 1px; outline: none; user-select: none;
+      transition: background 0.15s;
+    }
+    #soundBtn:hover { background: rgba(0,255,65,0.15); }
+  </style>
+</head>
+<body>
+  <canvas id="bgCanvas"></canvas>
+  <canvas id="gameCanvas"></canvas>
+  <button id="soundBtn">♪ OFF</button>
+
+<script>
+(function () {
+'use strict';
+
+// ─────────────────────────────────────────────────────────────
+//  CANVAS
+// ─────────────────────────────────────────────────────────────
+const bgCanvas   = document.getElementById('bgCanvas');
+const bgCtx      = bgCanvas.getContext('2d');
+const gameCanvas = document.getElementById('gameCanvas');
+const ctx        = gameCanvas.getContext('2d');
+const soundBtn   = document.getElementById('soundBtn');
+
+let W = 0, H = 0;
+
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  bgCanvas.width = gameCanvas.width = W;
+  bgCanvas.height = gameCanvas.height = H;
+  bgCtx.fillStyle = '#000';
+  bgCtx.fillRect(0, 0, W, H);
+  initRain();
+  if (state && state.player) state.player.x = W * 0.20;
+  if (state && state.screen === 'playing') {
+    const gy = H * GY;
+    for (const p of state.platforms) p.y = gy;
+    if (state.player && state.player.onGround) state.player.y = gy;
+  }
+}
+window.addEventListener('resize', resize);
+
+// ─────────────────────────────────────────────────────────────
+//  CONSTANTS
+// ─────────────────────────────────────────────────────────────
+const GRAVITY  = 0.6;
+const JUMP_V   = [-13, -11, -10]; // ground / 2nd / rhythm
+const MAX_FALL = 15;
+const PW       = 7;    // player half-width for collision
+const PH       = 40;   // player height
+const GY       = 0.70; // ground Y ratio
+const RHY_MIN  = 280;  // rhythm window ms
+const RHY_MAX  = 360;
+
+const STAGES = [
+  { d:    0, pw: [200, 350], g: [ 60, 100], s: 4 },
+  { d:  200, pw: [150, 300], g: [ 80, 140], s: 5 },
+  { d:  500, pw: [120, 250], g: [100, 180], s: 6 },
+  { d: 1000, pw: [ 80, 200], g: [120, 220], s: 7 },
+  { d: 2000, pw: [ 60, 160], g: [140, 260], s: 8 },
+];
+
+const MAT_CHARS = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const MAT_FS = 14;
+
+// ─────────────────────────────────────────────────────────────
+//  STATE
+// ─────────────────────────────────────────────────────────────
+const state = {
+  screen:     'title',   // 'title' | 'playing' | 'gameover'
+  score:      0,
+  speed:      4,
+  platforms:  [],
+  particles:  [],
+  player:     null,
+  snd:        false,
+  combo:      0,
+  comboTimer: 0,
+  inputCd:    0,
+  goAt:       0,
+  goScore:    0,
+};
+
+// ─────────────────────────────────────────────────────────────
+//  AUDIO
+// ─────────────────────────────────────────────────────────────
+let AC = null, master = null, bgmTid = null, bgmIdx = 0;
+const BGM_NOTES = [55, 65.41, 73.42, 87.31, 110, 130.81];
+
+function ensureAC() {
+  if (AC) return;
+  AC = new (window.AudioContext || window.webkitAudioContext)();
+  master = AC.createGain();
+  master.gain.value = 0.45;
+  master.connect(AC.destination);
+}
+
+function tone(freq, freq2, dur, wave, vol) {
+  if (!state.snd || !AC) return;
+  const t = AC.currentTime;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.connect(g); g.connect(master);
+  o.type = wave;
+  o.frequency.setValueAtTime(freq, t);
+  if (freq2 !== freq) o.frequency.linearRampToValueAtTime(freq2, t + dur);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.linearRampToValueAtTime(0.001, t + dur);
+  o.start(t); o.stop(t + dur);
+}
+
+function sfx(id) {
+  if (!state.snd || !AC) return;
+  if (id === 'j1')  return tone(260, 520, 0.06, 'square',   0.30);
+  if (id === 'j2')  return tone(320, 640, 0.06, 'square',   0.28);
+  if (id === 'rhy') return tone(400, 900, 0.10, 'sawtooth', 0.38);
+  if (id === 'die') {
+    for (let i = 0; i < 4; i++) {
+      const bt = AC.currentTime + i * 0.11;
+      const o = AC.createOscillator(), g = AC.createGain();
+      o.connect(g); g.connect(master);
+      o.type = 'square';
+      o.frequency.value = 440 - i * 75;
+      g.gain.setValueAtTime(0.25, bt);
+      g.gain.linearRampToValueAtTime(0.001, bt + 0.09);
+      o.start(bt); o.stop(bt + 0.09);
+    }
+  }
+}
+
+function startBGM() {
+  if (!state.snd || !AC) return;
+  stopBGM();
+  function tick() {
+    if (!state.snd || !AC) return;
+    const n = BGM_NOTES[bgmIdx++ % BGM_NOTES.length];
+    const t = AC.currentTime;
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.connect(g); g.connect(master);
+    o.type = 'triangle'; o.frequency.value = n;
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.linearRampToValueAtTime(0.07, t + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+    o.start(t); o.stop(t + 0.40);
+    bgmTid = setTimeout(tick, 230);
+  }
+  tick();
+}
+
+function stopBGM() {
+  if (bgmTid) { clearTimeout(bgmTid); bgmTid = null; }
+}
+
+soundBtn.addEventListener('click', function () {
+  state.snd = !state.snd;
+  soundBtn.textContent = '♪ ' + (state.snd ? 'ON' : 'OFF');
+  if (state.snd) {
+    ensureAC();
+    if (AC.state === 'suspended') AC.resume();
+    if (state.screen === 'playing') startBGM();
+  } else {
+    stopBGM();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+//  MATRIX RAIN
+// ─────────────────────────────────────────────────────────────
+let rainDrops = [];
+
+function initRain() {
+  const n = Math.floor(W / MAT_FS);
+  while (rainDrops.length < n) {
+    rainDrops.push({ y: -(Math.random() * 30), spd: 0.25 + Math.random() * 0.55 });
+  }
+  rainDrops.length = n;
+}
+
+function drawRain() {
+  bgCtx.fillStyle = 'rgba(0,0,0,0.045)';
+  bgCtx.fillRect(0, 0, W, H);
+  bgCtx.font = MAT_FS + "px 'Share Tech Mono', monospace";
+  for (let i = 0; i < rainDrops.length; i++) {
+    const d = rainDrops[i];
+    d.y += d.spd;
+    const sy = d.y * MAT_FS;
+    if (sy < 0) continue;
+    bgCtx.fillStyle = '#c8ffc8';
+    bgCtx.fillText(MAT_CHARS[Math.floor(Math.random() * MAT_CHARS.length)], i * MAT_FS, sy);
+    if (sy > H && Math.random() > 0.975) {
+      d.y   = -(Math.floor(Math.random() * 20));
+      d.spd = 0.25 + Math.random() * 0.55;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PLAYER
+// ─────────────────────────────────────────────────────────────
+function mkPlayer() {
+  return {
+    x:        W * 0.20,
+    y:        H * GY,   // feet (bottom)
+    vy:       0,
+    onGround: false,
+    jumps:    0,
+    lastJmpT: 0,
+    tick:     0,
+    dead:     false,
+  };
+}
+
+function drawPlayer(p) {
+  if (!p) return;
+  ctx.save();
+  const x = p.x, bot = p.y;
+  const headY = bot - PH + 7;
+  const shY   = bot - PH + 16;
+  const hipY  = bot - 13;
+
+  ctx.shadowColor = '#00ff41';
+  ctx.shadowBlur  = 18;
+  ctx.strokeStyle = '#00ff41';
+  ctx.lineWidth   = 2;
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
+
+  // Head
+  ctx.beginPath();
+  ctx.arc(x, headY, 7, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,12,0,0.9)';
+  ctx.fill();
+  ctx.stroke();
+
+  // Torso
+  ctx.beginPath();
+  ctx.moveTo(x, headY + 7);
+  ctx.lineTo(x, hipY);
+  ctx.stroke();
+
+  const sw = Math.sin(p.tick * 0.22);
+
+  if (!p.onGround) {
+    // Jump pose: arms up, legs close
+    ctx.beginPath(); ctx.moveTo(x, shY + 2); ctx.lineTo(x - 10, shY - 8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, shY + 2); ctx.lineTo(x + 10, shY - 8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, hipY); ctx.lineTo(x - 5, hipY + 11); ctx.lineTo(x - 4, bot); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, hipY); ctx.lineTo(x + 5, hipY + 11); ctx.lineTo(x + 4, bot); ctx.stroke();
+  } else {
+    // Run pose: swinging arms & legs
+    ctx.beginPath(); ctx.moveTo(x, shY + 2); ctx.lineTo(x - 10, shY + 8 + sw * 9); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, shY + 2); ctx.lineTo(x + 10, shY + 8 - sw * 9); ctx.stroke();
+    const ls = sw * 8;
+    ctx.beginPath(); ctx.moveTo(x, hipY); ctx.lineTo(x - 5 - ls * 0.4, hipY + 12); ctx.lineTo(x - 4 + ls, bot); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, hipY); ctx.lineTo(x + 5 + ls * 0.4, hipY + 12); ctx.lineTo(x + 4 - ls, bot); ctx.stroke();
+    p.tick++;
+  }
+
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PLATFORMS
+// ─────────────────────────────────────────────────────────────
+function getStage(dist) {
+  for (let i = STAGES.length - 1; i >= 0; i--) {
+    if (dist >= STAGES[i].d) return STAGES[i];
+  }
+  return STAGES[0];
+}
+
+function rnd(a, b) { return a + Math.random() * (b - a); }
+
+function addPlatform() {
+  const s    = getStage(Math.floor(state.score));
+  const last = state.platforms[state.platforms.length - 1];
+  state.platforms.push({
+    x:     last.x + last.width + rnd(s.g[0], s.g[1]),
+    y:     H * GY,
+    width: rnd(s.pw[0], s.pw[1]),
+  });
+}
+
+function initPlatforms() {
+  state.platforms = [];
+  state.platforms.push({ x: -200, y: H * GY, width: W * 0.65 });
+  while (state.platforms[state.platforms.length - 1].x +
+         state.platforms[state.platforms.length - 1].width < W * 2.5) {
+    addPlatform();
+  }
+}
+
+function updatePlatforms() {
+  for (const p of state.platforms) p.x -= state.speed;
+  while (state.platforms.length > 1 &&
+         state.platforms[0].x + state.platforms[0].width < -200) {
+    state.platforms.shift();
+  }
+  while (state.platforms[state.platforms.length - 1].x +
+         state.platforms[state.platforms.length - 1].width < W + 500) {
+    addPlatform();
+  }
+}
+
+function drawPlatforms() {
+  ctx.save();
+  for (const p of state.platforms) {
+    const { x, y, width: w } = p;
+
+    // Body
+    ctx.fillStyle = 'rgba(0,255,65,0.07)';
+    ctx.fillRect(x, y, w, 18);
+
+    // Top glow line
+    ctx.shadowBlur  = 7;
+    ctx.shadowColor = '#00ff41';
+    ctx.fillStyle   = 'rgba(0,255,65,0.90)';
+    ctx.fillRect(x, y, w, 2);
+
+    // Sub-glow band
+    ctx.shadowBlur = 0;
+    ctx.fillStyle  = 'rgba(0,255,65,0.18)';
+    ctx.fillRect(x, y + 2, w, 4);
+
+    // Digital tick marks
+    ctx.fillStyle = 'rgba(0,255,65,0.30)';
+    for (let tx = x + 12; tx < x + w - 4; tx += 26) {
+      ctx.fillRect(tx, y, 1, 8);
+    }
+  }
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PHYSICS
+// ─────────────────────────────────────────────────────────────
+function physics() {
+  const p = state.player;
+  if (!p || p.dead) return;
+
+  p.vy = Math.min(p.vy + GRAVITY, MAX_FALL);
+  const prevY = p.y;
+  p.y += p.vy;
+
+  const wasOn = p.onGround;
+  p.onGround  = false;
+
+  if (p.vy >= 0) {
+    for (const pl of state.platforms) {
+      if (prevY <= pl.y && p.y >= pl.y) {
+        const px = p.x;
+        if (px + PW > pl.x && px - PW < pl.x + pl.width) {
+          p.y        = pl.y;
+          p.vy       = 0;
+          p.onGround = true;
+          if (!wasOn) state.combo = 0; // reset combo on landing
+          p.jumps    = 0;
+          break;
+        }
+      }
+    }
+  }
+
+  if (p.y > H + 80 && !p.dead) triggerGameOver();
+}
+
+// ─────────────────────────────────────────────────────────────
+//  JUMP
+// ─────────────────────────────────────────────────────────────
+function doJump() {
+  const p = state.player;
+  if (!p || p.dead) return;
+  const now = performance.now();
+
+  if (p.onGround) {
+    p.vy = JUMP_V[0]; p.onGround = false; p.jumps = 1; p.lastJmpT = now; sfx('j1');
+  } else if (p.jumps === 1) {
+    p.vy = JUMP_V[1]; p.jumps = 2; p.lastJmpT = now; sfx('j2');
+  } else if (p.jumps >= 2) {
+    const dt = now - p.lastJmpT;
+    if (dt >= RHY_MIN && dt <= RHY_MAX) {
+      p.vy = JUMP_V[2]; p.jumps++; p.lastJmpT = now;
+      state.combo++;
+      state.comboTimer = 110;
+      sfx('rhy');
+      burst(p.x, p.y - PH * 0.5);
+    }
+    // outside rhythm window: no effect
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PARTICLES
+// ─────────────────────────────────────────────────────────────
+function burst(x, y) {
+  for (let i = 0; i < 16; i++) {
+    const a = Math.PI * 2 * i / 16 + Math.random() * 0.4;
+    const s = 1.5 + Math.random() * 3;
+    state.particles.push({
+      x, y,
+      vx:  Math.cos(a) * s,
+      vy:  Math.sin(a) * s - 1.2,
+      life: 1.0,
+      col: (i % 3 === 0) ? '#39ff14' : '#00ff41',
+    });
+  }
+}
+
+function updateParticles() {
+  for (let i = state.particles.length - 1; i >= 0; i--) {
+    const p = state.particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.life -= 0.033;
+    if (p.life <= 0) state.particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  ctx.save();
+  for (const p of state.particles) {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle   = p.col;
+    ctx.shadowBlur  = 6;
+    ctx.shadowColor = p.col;
+    const sz = 3 * p.life;
+    ctx.fillRect(p.x - sz * 0.5, p.y - sz * 0.5, sz, sz);
+  }
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────
+//  GAME OVER
+// ─────────────────────────────────────────────────────────────
+function triggerGameOver() {
+  state.player.dead = true;
+  state.screen  = 'gameover';
+  state.goAt    = performance.now();
+  state.goScore = Math.floor(state.score);
+  state.inputCd = 40;
+  sfx('die');
+  stopBGM();
+}
+
+function drawGameOver() {
+  const el = performance.now() - state.goAt;
+
+  // Darkening overlay (0 → 0.88 over 1 s)
+  ctx.fillStyle = 'rgba(0,0,0,' + Math.min(0.88, el / 1000 * 0.88) + ')';
+  ctx.fillRect(0, 0, W, H);
+
+  // Red flash (first ~380 ms)
+  if (el < 380) {
+    ctx.fillStyle = 'rgba(255,0,64,' + ((1 - el / 380) * 0.62) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  if (el < 900) return;
+
+  const ta = Math.min(1, (el - 900) / 500);
+  ctx.save();
+  ctx.globalAlpha = ta;
+  ctx.textAlign   = 'center';
+
+  // SYSTEM FAILURE
+  const sf = Math.max(30, Math.min(W * 0.07, 66));
+  ctx.font        = 'bold ' + sf + "px 'Share Tech Mono', monospace";
+  ctx.fillStyle   = '#ff0040';
+  ctx.shadowBlur  = 38;
+  ctx.shadowColor = '#ff0040';
+  ctx.fillText('SYSTEM FAILURE', W * 0.5, H * 0.38);
+
+  // Distance score
+  const scf = Math.max(18, Math.min(W * 0.033, 32));
+  ctx.font        = scf + "px 'Share Tech Mono', monospace";
+  ctx.fillStyle   = '#00ff41';
+  ctx.shadowColor = '#00ff41';
+  ctx.shadowBlur  = 16;
+  ctx.fillText('DISTANCE: ' + state.goScore + 'm', W * 0.5, H * 0.50);
+
+  // Restart prompt (blink every 600 ms, only after input cooldown)
+  if (state.inputCd <= 0 && Math.floor(el / 600) % 2 === 0) {
+    const rf = Math.max(13, Math.min(W * 0.021, 19));
+    ctx.font       = rf + "px 'Share Tech Mono', monospace";
+    ctx.shadowBlur = 8;
+    ctx.fillText('PRESS SPACE / TAP TO REBOOT', W * 0.5, H * 0.64);
+  }
+
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TITLE
+// ─────────────────────────────────────────────────────────────
+let titleTick = 0;
+
+function drawTitle() {
+  titleTick++;
+  ctx.save();
+  ctx.textAlign = 'center';
+
+  // Main title
+  const ts = Math.min(W * 0.09, 78);
+  ctx.font        = 'bold ' + ts + "px 'Share Tech Mono', monospace";
+  ctx.fillStyle   = '#00ff41';
+  ctx.shadowBlur  = 36;
+  ctx.shadowColor = '#00ff41';
+  ctx.fillText('MATRIX RUN', W * 0.5, H * 0.32);
+
+  // Subtitle
+  const ss = Math.min(W * 0.028, 22);
+  ctx.font        = ss + "px 'Share Tech Mono', monospace";
+  ctx.fillStyle   = '#39ff14';
+  ctx.shadowBlur  = 14;
+  ctx.fillText('THERE IS NO SPOON', W * 0.5, H * 0.32 + ts * 0.85);
+
+  // Blinking start prompt
+  if (Math.floor(titleTick / 36) % 2 === 0) {
+    const ps = Math.min(W * 0.024, 20);
+    ctx.font        = ps + "px 'Share Tech Mono', monospace";
+    ctx.fillStyle   = '#00ff41';
+    ctx.shadowBlur  = 10;
+    ctx.fillText('PRESS SPACE / TAP TO START', W * 0.5, H * 0.56);
+  }
+
+  // Controls hint
+  ctx.globalAlpha = 0.52;
+  ctx.shadowBlur  = 0;
+  const hs = Math.min(W * 0.017, 14);
+  ctx.font      = hs + "px 'Share Tech Mono', monospace";
+  ctx.fillStyle = '#00ff41';
+  ctx.fillText('SPACE / TAP : JUMP',                                       W * 0.5, H * 0.70);
+  ctx.fillText('DOUBLE JUMP AVAILABLE MID-AIR',                            W * 0.5, H * 0.755);
+  ctx.fillText('RHYTHM JUMP: PRESS AT EXACTLY 320ms INTERVALS  [ADVANCED]', W * 0.5, H * 0.81);
+
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────
+//  HUD
+// ─────────────────────────────────────────────────────────────
+function drawHUD() {
+  ctx.save();
+  ctx.textAlign = 'right';
+
+  const fs = Math.max(15, Math.min(W * 0.022, 22));
+  ctx.font        = fs + "px 'Share Tech Mono', monospace";
+  ctx.fillStyle   = '#00ff41';
+  ctx.shadowBlur  = 14;
+  ctx.shadowColor = '#00ff41';
+  ctx.fillText(Math.floor(state.score) + 'm', W - 18, 38);
+
+  if (state.comboTimer > 0) {
+    state.comboTimer--;
+    const cfs = Math.max(12, fs * 0.72);
+    ctx.globalAlpha = Math.min(1, state.comboTimer / 25);
+    ctx.font        = cfs + "px 'Share Tech Mono', monospace";
+    ctx.fillStyle   = '#39ff14';
+    ctx.shadowColor = '#39ff14';
+    ctx.shadowBlur  = 10;
+    ctx.fillText('MULTI JUMP \xd7' + state.combo, W - 18, 38 + fs * 1.45);
+  }
+
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────
+//  GAME INIT
+// ─────────────────────────────────────────────────────────────
+function startGame() {
+  state.screen     = 'playing';
+  state.score      = 0;
+  state.speed      = 4;
+  state.particles  = [];
+  state.combo      = 0;
+  state.comboTimer = 0;
+  state.inputCd    = 0;
+  bgmIdx = 0;
+  initPlatforms();
+  state.player = mkPlayer();
+  if (state.snd) {
+    ensureAC();
+    if (AC.state === 'suspended') AC.resume();
+    startBGM();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  INPUT
+// ─────────────────────────────────────────────────────────────
+function onAction() {
+  if (state.screen === 'title') {
+    if (state.inputCd > 0) return;
+    startGame();
+  } else if (state.screen === 'playing') {
+    doJump();
+  } else if (state.screen === 'gameover') {
+    if (state.inputCd > 0) return;
+    if (performance.now() - state.goAt > 500) state.screen = 'title';
+  }
+}
+
+document.addEventListener('keydown', function (e) {
+  if (e.code === 'Space' || e.key === ' ') { e.preventDefault(); onAction(); }
+});
+
+gameCanvas.addEventListener('touchstart', function (e) {
+  e.preventDefault(); onAction();
+}, { passive: false });
+
+gameCanvas.addEventListener('mousedown', onAction);
+
+// ─────────────────────────────────────────────────────────────
+//  MAIN LOOP
+// ─────────────────────────────────────────────────────────────
+function loop() {
+  requestAnimationFrame(loop);
+
+  drawRain(); // bgCanvas
+
+  ctx.clearRect(0, 0, W, H);
+  if (state.inputCd > 0) state.inputCd--;
+
+  if (state.screen === 'title') {
+
+    drawTitle();
+
+  } else if (state.screen === 'playing') {
+
+    state.score += state.speed / 60;
+    state.speed  = getStage(Math.floor(state.score)).s;
+    updatePlatforms();
+    physics();
+    updateParticles();
+    drawPlatforms();
+    drawPlayer(state.player);
+    drawParticles();
+    drawHUD();
+
+  } else if (state.screen === 'gameover') {
+
+    updateParticles();
+    drawPlatforms();
+    drawParticles();
+    drawGameOver();
+
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  BOOT
+// ─────────────────────────────────────────────────────────────
+resize();
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
